@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DictGen.Abstractions/DictGen.Abstractions.csproj" />
+    <Project Path="src/DictGen.Cli/DictGen.Cli.csproj" />
+    <Project Path="src/DictGen.EFCore.PostgreSql/DictGen.EFCore.PostgreSql.csproj" />
+    <Project Path="src/DictGen.EFCore.SqlServer/DictGen.EFCore.SqlServer.csproj" />
+    <Project Path="src/DictGen.Generators.StaticSite/DictGen.Generators.StaticSite.csproj" />
+  </Folder>
+  <Folder Name="/解决方案项/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="README.md" />
+  </Folder>
+</Solution>

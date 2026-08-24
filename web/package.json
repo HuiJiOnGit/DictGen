@@ -1,0 +1,23 @@
+{
+  "name": "dictgen-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.0.3",
+    "@types/node": "^26.2.0",
+    "svelte": "^5.23.0",
+    "svelte-check": "^4.1.5",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  },
+  "dependencies": {
+    "highlight.js": "^11.12.0"
+  }
+}

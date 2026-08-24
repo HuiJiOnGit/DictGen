@@ -1,0 +1,30 @@
+# ===== 敏感信息:真实数据库连接字符串(仓库只保留 appsettings.example.json)=====
+appsettings.json
+
+# ===== 生成产物(含真实数据库结构,可用 --sample 重新生成)=====
+output/
+output.zip
+
+# ===== .NET 构建产物 =====
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ===== IDE =====
+.vs/
+.vscode/
+.idea/
+
+# ===== Node / 前端 =====
+node_modules/
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+
+# ===== 日志与临时文件 =====
+*.log
+*.tmp
+*.bak
