@@ -14,8 +14,15 @@ function parseHash(): Route {
   const m = path.match(/^([tTvVpP])\/(.+)$/);
   if (m) {
     const type = m[1]!.toUpperCase();
-    const key = `${type}:${m[2]!}`;
-    return { page: "detail", key };
+    // 浏览器会把 hash 里的非 ASCII 字符百分号编码(location.hash 返回编码形态),
+    // 必须先还原再与索引 key 比对,否则含中文的对象名永远匹配不上。
+    let name = m[2]!;
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      /* 名称本身含 "%" 等非法编码序列时按原样匹配 */
+    }
+    return { page: "detail", key: `${type}:${name}` };
   }
   return { page: "home" };
 }
@@ -28,7 +35,14 @@ window.addEventListener("hashchange", () => {
   route.value = parseHash();
 });
 
+/** 对象键转详情页链接。名称段统一 encodeURIComponent,与 parseHash 的解码严格互逆
+ *  (直接拼原始名字时,名称里含 "%" 会被浏览器误当编码序列,round-trip 后对不上)。 */
+export function hrefOf(key: string): string {
+  const i = key.indexOf(":");
+  return `#/${key.slice(0, i)}/${encodeURIComponent(key.slice(i + 1))}`;
+}
+
 /** 按对象键导航到详情页,如 "T:dbo.Users" */
 export function navigateTo(key: string): void {
-  location.hash = "/" + key.replace(":", "/");
+  location.hash = hrefOf(key);
 }

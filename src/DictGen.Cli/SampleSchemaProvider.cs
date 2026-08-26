@@ -124,6 +124,18 @@ public sealed class SampleSchemaProvider : ISchemaProvider, ISchemaInfoProvider
             ],
             ForeignKeys = [new ForeignKeyInfo { Name = "FK_OrderItems_Orders", ReferencedTable = "dbo.Orders", Columns = [new ForeignKeyColumn("OrderId", "Id")], OnDeleteAction = "CASCADE", OnUpdateAction = "NO_ACTION" }],
         };
+        // 数字开头的对象名:归入非字母分组,验证分块 id 的 URL 安全性(不能产生 "#.js")
+        yield return new TableInfo
+        {
+            Schema = "dbo", Name = "2024_ArchiveLog", Description = "数字开头表名(示例,验证分块命名)", RowCount = 42,
+            CreatedAt = new DateTime(2024, 1, 1),
+            Columns =
+            [
+                new ColumnInfo { Name = "Id", Ordinal = 1, DataType = "int", DataTypeFull = "INT", IsIdentity = true, IsPrimaryKey = true },
+                new ColumnInfo { Name = "Message", Ordinal = 2, DataType = "nvarchar", DataTypeFull = "NVARCHAR(200)", IsNullable = true },
+            ],
+            Indexes = [new IndexInfo { Name = "PK_2024_ArchiveLog", IsPrimaryKey = true, IsUnique = true, Type = "CLUSTERED", Columns = ["Id"] }],
+        };
     }
 
     private static IEnumerable<ViewInfo> BuildViews()
@@ -175,6 +187,22 @@ public sealed class SampleSchemaProvider : ISchemaProvider, ISchemaInfoProvider
             Definition = """
                 CREATE PROCEDURE [dbo].[SP_CancelExpiredOrders] @TimeoutMinutes INT=30, @Affected INT OUTPUT AS
                 BEGIN SET NOCOUNT ON; UPDATE dbo.Orders SET Status=2 WHERE Status=0 AND CreatedAt<DATEADD(MINUTE,-@TimeoutMinutes,GETDATE()); SET @Affected=@@ROWCOUNT; END
+                """,
+        };
+        // 含中文的对象名:真实库中很常见(如"xxx_月度汇总"),用于验证 hash 路由的编码/解码
+        yield return new ProcedureInfo
+        {
+            Schema = "dbo", Name = "SP_GetUserOrders_月度汇总", Description = "按月汇总用户订单数与金额(示例,验证中文对象名路由)",
+            Parameters =
+            [
+                new ParameterInfo { Name = "@UserId", Ordinal = 1, DataTypeFull = "INT", Direction = "IN" },
+            ],
+            Definition = """
+                CREATE PROCEDURE [dbo].[SP_GetUserOrders_月度汇总] @UserId INT AS
+                BEGIN SET NOCOUNT ON;
+                  SELECT CONVERT(VARCHAR(7), o.CreatedAt, 120) AS [月份], COUNT(*) AS 订单数, SUM(o.TotalAmount) AS 总金额
+                  FROM dbo.Orders o WHERE o.UserId = @UserId GROUP BY CONVERT(VARCHAR(7), o.CreatedAt, 120);
+                END
                 """,
         };
     }

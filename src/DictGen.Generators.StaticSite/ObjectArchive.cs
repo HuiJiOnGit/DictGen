@@ -67,6 +67,12 @@ internal sealed class ObjectArchive
         return "#";
     }
 
+    /// <summary>
+    /// 分组键 → 分块基名。'#' 在 URL 里是片段起始符,不能作为脚本 src / 动态加载的文件名
+    /// (data/#.js 会变成请求 data/ + 空 fragment),故用 '0' 落盘;前端只依赖索引里的 ch 字段,无感知。
+    /// </summary>
+    private static string ChunkBaseOf(string letter) => letter == "#" ? "0" : letter;
+
     /// <summary>接收一个对象;若某字母分块已写满,返回待写盘作业,否则 null。</summary>
     public ChunkJob? Add(SchemaObject obj)
     {
@@ -89,7 +95,8 @@ internal sealed class ObjectArchive
 
         // 该对象所属分块 id(当前打开的块)
         var seq = _chunkSeq.GetValueOrDefault(letter);
-        var chunkId = seq == 0 ? letter : $"{letter}-{seq + 1}";
+        var baseId = ChunkBaseOf(letter);
+        var chunkId = seq == 0 ? baseId : $"{baseId}-{seq + 1}";
         list.Add(wire);
         ObjectCount++;
 
@@ -145,7 +152,8 @@ internal sealed class ObjectArchive
         {
             if (list.Count == 0) continue;
             var seq = _chunkSeq.GetValueOrDefault(letter);
-            var chunkId = seq == 0 ? letter : $"{letter}-{seq + 1}";
+            var baseId = ChunkBaseOf(letter);
+            var chunkId = seq == 0 ? baseId : $"{baseId}-{seq + 1}";
             _byLetter[letter].Add(chunkId);
             _readyChunks.Add(new ChunkJob(chunkId, list.ToDictionary(o => KeyOf(o), o => o)));
         }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { buildTableDdl } from "../ddl";
+  import { hrefOf } from "../router.svelte";
   import type { DictObject } from "../types";
   import { fmtNum } from "../utils";
   import CodeBlock from "./ui/CodeBlock.svelte";
@@ -96,7 +97,7 @@
                 <tr>
                   <td class="mono">{f.n}</td>
                   <td class="mono">{f.cols.join(", ")}</td>
-                  <td class="mono"><a href="#/t/{f.rt}">{f.rt}</a></td>
+                  <td class="mono"><a href={hrefOf(`T:${f.rt}`)}>{f.rt}</a></td>
                   <td class="mono dim">{f.rcols.join(", ")}</td>
                   <td class="dim">{f.del ?? ""}{f.upd && f.upd !== f.del ? ` / ${f.upd}` : ""}</td>
                 </tr>

@@ -39,7 +39,7 @@ cd web && pnpm install && pnpm build   # 产物 → ../output/
 ## 4. 运行与生成
 
 ```bash
-# 示例模式(无需数据库,3表/1视图/2过程,几秒完成)
+# 示例模式(无需数据库,4表/1视图/3过程,几秒完成)
 dotnet run --project src/DictGen.Cli -- --sample
 
 # 真实数据库(读 src/DictGen.Cli/appsettings.json 的 ConnectionString)
@@ -64,6 +64,7 @@ dotnet run --project src/DictGen.Cli -- --sample
 - `output/index.html` 含 `data/search-index.js` 引用、`__DICT_CHUNK_QUEUE` 桥接、分块 `<script src="data/X.js">` 标签(示例模式应有 U/O/V/S.js)
 - `output/data/` 下有 `search-index.js` + 分块文件
 - `output/data/search-index.js` 中对象键格式 `"k":"T:dbo.Users"`,且过程/视图条目**含 `def` 字段**(正文搜索依赖)
+- 边界命名回归:示例含数字开头表 `dbo.2024_ArchiveLog`(归入非字母分组)与含中文过程 `SP_GetUserOrders_月度汇总`;分块文件必须是 **`data/0.js`** 而非 `data/#.js`(`#` 在 URL 中是片段起始符),索引里两者的 `ch` 分别为 `0` 和字母块
 
 ### 5.2 用 LocalDB 测真实 SQL 路径(可选)
 

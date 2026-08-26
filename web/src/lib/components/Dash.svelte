@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getIndex, getMeta } from "../data";
-  import { navigateTo } from "../router.svelte";
+  import { hrefOf, navigateTo } from "../router.svelte";
   import type { IndexEntry, ObjectType } from "../types";
   import { esc } from "../utils";
 
@@ -66,7 +66,7 @@
           {#each list as e (e.k)}
             <a
               class="ov-item"
-              href="#/{TYPE_KEY[e.t]}/{e.s}.{e.n}"
+              href={hrefOf(`${e.t}:${e.s}.${e.n}`)}
               onclick={() => openObject(e)}
             >
               <span class="mono">{e.s}.{e.n}</span>

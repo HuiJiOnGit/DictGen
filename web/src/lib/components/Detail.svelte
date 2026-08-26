@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { loadObject, getIndex } from "../data";
+  import { hrefOf } from "../router.svelte";
   import type { DictObject, IndexEntry, ObjectType } from "../types";
   import { copyText, esc } from "../utils";
   import TypeBadge from "./ui/TypeBadge.svelte";
@@ -12,13 +13,18 @@
 
   const TYPE_LABEL: Record<ObjectType, string> = { T: "表", V: "视图", P: "过程" };
 
-  const state = $state<{ obj: DictObject | null; error: string | null }>({ obj: null, error: null });
+  const state = $state<{ obj: DictObject | null; error: string | null; notFound: boolean }>({ obj: null, error: null, notFound: false });
 
   $effect(() => {
     state.obj = null;
     state.error = null;
+    state.notFound = false;
     loadObject(key)
-      .then((o) => { state.obj = o; })
+      .then((o) => {
+        // null = 索引里没有该 key:明确提示"未找到",而不是永远停在加载态
+        if (o === null) state.notFound = true;
+        else state.obj = o;
+      })
       .catch((e) => { state.error = e instanceof Error ? e.message : String(e); });
   });
 
@@ -63,10 +69,6 @@
     return allEntries[idx + delta] ?? null;
   }
 
-  function hrefOf(entry: IndexEntry): string {
-    return "#/" + entry.k.replace(":", "/");
-  }
-
   function goHome() {
     location.hash = "#/";
   }
@@ -79,6 +81,12 @@
 
 {#if state.error}
   <div class="loading">加载失败: {esc(state.error)}</div>
+{:else if state.notFound}
+  <div class="loading">
+    <p>未找到对象:<b class="mono">{esc(key)}</b></p>
+    <p>它可能已被删除、重命名,或链接不完整。</p>
+    <p><a href="#/">← 返回主页</a></p>
+  </div>
 {:else if state.obj === null}
   <div class="loading"><div class="spinner"></div>加载中…</div>
 {:else}
@@ -129,12 +137,12 @@
   <!-- 固定底部导航:左上 上一个 / 右上 下一个 -->
   <nav class="fixed-nav">
     {#if neighbor(-1)}
-      <a href={hrefOf(neighbor(-1)!)} class="nav-pill prev" title={neighbor(-1)!.n}>‹ 上一个</a>
+      <a href={hrefOf(neighbor(-1)!.k)} class="nav-pill prev" title={neighbor(-1)!.n}>‹ 上一个</a>
     {:else}
       <span class="nav-pill prev disabled">‹ 上一个</span>
     {/if}
     {#if neighbor(1)}
-      <a href={hrefOf(neighbor(1)!)} class="nav-pill next" title={neighbor(1)!.n}>下一个 ›</a>
+      <a href={hrefOf(neighbor(1)!.k)} class="nav-pill next" title={neighbor(1)!.n}>下一个 ›</a>
     {:else}
       <span class="nav-pill next disabled">下一个 ›</span>
     {/if}
