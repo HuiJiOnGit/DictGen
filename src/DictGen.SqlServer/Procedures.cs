@@ -1,11 +1,10 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using DictGen.Abstractions;
-using System.Threading.Channels;
 using DictGen.Abstractions.Models;
 using Microsoft.Data.SqlClient;
 
-namespace DictGen.EFCore.SqlServer;
+namespace DictGen.SqlServer;
 
 /// <summary>
 /// SqlServerSchemaProvider 的存储过程相关 partial。
@@ -38,7 +37,8 @@ internal sealed partial class SqlServerSchemaProvider
             if ((i + 1) % 25 == 0 || i == procs.Count - 1)
             {
                 Logger.LogInformation("⚙️ 过程 {Done}/{Total}", i + 1, procs.Count);
-                progress?.Report(new SchemaProgress(SchemaReadStage.ReadingProcedures, i + 1, procs.Count, 15 + 10));
+                progress?.Report(new SchemaProgress(SchemaReadStage.ReadingProcedures, i + 1, procs.Count,
+                    15 + 10 * (i + 1) / procs.Count));
             }
         }
     }

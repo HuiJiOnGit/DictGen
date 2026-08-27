@@ -84,11 +84,10 @@ export default defineConfig((_env: ConfigEnv): UserConfig => ({
     outDir: OUT_DIR,
     emptyOutDir: false, // 不清空保留后端生成的 data/
     cssCodeSplit: false,
-    rollupOptions: {
+    rolldownOptions: {
       input: fileURLToPath(new URL("./index.html", import.meta.url)),
       output: {
-        format: "iife",
-        inlineDynamicImports: true,
+        format: "iife", // Rolldown 对 iife 强制单分块(等价旧版 inlineDynamicImports)
         entryFileNames: "app.js",
         assetFileNames: "style.css",
       },

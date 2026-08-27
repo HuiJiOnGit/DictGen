@@ -1,6 +1,6 @@
 # DictGen — 数据库数据字典生成器
 
-基于 **.NET 10 + EF Core** 的数据库结构文档生成工具。读取数据库元数据(表、视图、存储过程、字段、索引、外键、说明),生成**现代化、可离线双击打开**的静态数据字典站点。
+基于 **.NET 10 + 原生 ADO.NET(Microsoft.Data.SqlClient)** 的数据库结构文档生成工具。读取数据库元数据(表、视图、存储过程、字段、索引、外键、说明),生成**现代化、可离线双击打开**的静态数据字典站点。
 
 前端基于 **Svelte 5 + TypeScript + Vite** 构建,产物为纯静态文件:可直接双击打开(`file://`),也可部署到任意 Web 服务器(IIS / Nginx / 内网共享)。4000+ 对象规模下也不会出现 vuepress 式 OOM——数据由 .NET **流式生成**(Channel 边读边写),前端分块加载,内存占用有界。
 
@@ -37,13 +37,12 @@ DictGen/
 │   │   ├── IDataDictionaryGenerator.cs    # 产物生成器接口(全量 + 流式)
 │   │   ├── GenerationOptions.cs / DatabaseOptions.cs
 │   │   └── Models/                        # Table/View/Procedure/Column/Index/FK/SchemaObject...
-│   ├── DictGen.EFCore.SqlServer/     # SQL Server 提供器(partial 多文件拆分)
+│   ├── DictGen.SqlServer/            # SQL Server 提供器(partial 多文件拆分,原生 T-SQL)
 │   │   ├── SqlServerSchemaProvider.cs     # 入口:流式 Channel 三路并行 + 通用辅助
 │   │   ├── Tables.cs                      # 表:清单/字段/索引/外键
 │   │   ├── Views.cs                       # 视图:清单/字段/定义(分批)
-│   │   ├── Procedures.cs                  # 存储过程:清单/参数/定义(分批)
-│   │   └── SchemaDbContext.cs
-│   ├── DictGen.EFCore.PostgreSql/    # 占位:后续按需实现 PostgreSQL 提供器
+│   │   └── Procedures.cs                  # 存储过程:清单/参数/定义(分批)
+│   ├── DictGen.PostgreSql/           # 占位:后续按需实现 PostgreSQL 提供器
 │   ├── DictGen.Generators.StaticSite/# 静态站点生成器
 │   │   ├── StaticSiteGenerator.cs         # 流式生成:Channel 多消费者并行写盘
 │   │   └── ObjectArchive.cs               # 流式归档:增量搜索索引 + 按字母分块
@@ -75,7 +74,7 @@ DictGen/
 
 | 关注点 | 接口 | 实现 |
 |--------|------|------|
-| 数据库 | `ISchemaProvider` / `ISchemaInfoProvider` | `DictGen.EFCore.SqlServer`(键 `"SqlServer"`)、`SampleSchemaProvider`(键 `"Sample"`) |
+| 数据库 | `ISchemaProvider` / `ISchemaInfoProvider` | `DictGen.SqlServer`(键 `"SqlServer"`)、`SampleSchemaProvider`(键 `"Sample"`) |
 | 产物 | `IDataDictionaryGenerator` | `StaticSiteGenerator`(键 `"StaticSite"`) |
 
 通过 `Microsoft.Extensions.DependencyInjection` **键控 DI** 注册,由 `appsettings.json` 的 `Database:Provider` / `Generation:Generator` 选择。
@@ -183,12 +182,10 @@ pnpm dev            # → http://localhost:5173 (数据来自上次后端生成�
     "IncludeTables": true,            // 是否生成表
     "IncludeViews": true,             // 是否生成视图
     "IncludeProcedures": true,        // 是否生成存储过程
-    "IncludeRowCounts": true,         // 是否读取表行数(分区统计,开销极小)
     "IncludeObjectDefinitions": true, // 是否读取视图/存储过程定义文本
     "EmbedSingleFile": false,         // true = 单文件 HTML(全部内联);false = 分块 SPA
     "CleanOutputDirectory": true,     // 生成前清空 data/ 子目录(不碰前端外壳)
-    "SchemaFilter": [],               // 只生成指定 schema,如 ["dbo"];空 = 全部
-    "ObjectNameFilter": []            // 对象名包含过滤(忽略大小写),空 = 全部
+    "SchemaFilter": []                // 只生成指定 schema,如 ["dbo"];空 = 全部
   }
 }
 ```
@@ -236,7 +233,7 @@ pnpm build          # 生产构建 → 输出到 ../output/(index.html / app.js 
 
 ### 新增数据库提供器(如 PostgreSQL)
 
-1. 新建类库 `DictGen.EFCore.PostgreSql`(已存在占位),实现:
+1. 新建类库 `DictGen.PostgreSql`(已存在占位),实现:
 
 ```csharp
 public sealed class PostgreSqlSchemaProvider : ISchemaProvider, ISchemaInfoProvider
@@ -251,7 +248,7 @@ public sealed class PostgreSqlSchemaProvider : ISchemaProvider, ISchemaInfoProvi
 2. 提供 DI 注册扩展(键名自定义,如 `"PostgreSql"`),在主程序 `Program.cs` 按需注册。
 3. `appsettings.json` 的 `Database:Provider` 改为对应键名。
 
-数据库无关模型见 `DictGen.Abstractions/Models/`,所有字段均可选填。流式接口实现可参考 `DictGen.EFCore.SqlServer`(partial 拆分:Tables/Views/Procedures)。
+数据库无关模型见 `DictGen.Abstractions/Models/`,所有字段均可选填。流式接口实现可参考 `DictGen.SqlServer`(partial 拆分:Tables/Views/Procedures)。
 
 ### 新增产物生成器(如 Markdown / PDF)
 

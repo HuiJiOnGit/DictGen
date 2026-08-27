@@ -54,6 +54,12 @@ public sealed class DictionaryGenerationService(
 
             Environment.ExitCode = 0;
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Ctrl+C / 主机关闭属于正常中断,不算失败
+            Logger.LogWarning("⏹ 生成已取消");
+            Environment.ExitCode = 0;
+        }
         catch (Exception ex)
         {
             Logger.LogError(ex, "❌ 生成失败: {Message}", ex.Message);

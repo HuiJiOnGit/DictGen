@@ -29,7 +29,7 @@ internal sealed class ObjectArchive
     private readonly Dictionary<string, List<object>> _pending = [];
     private readonly Dictionary<string, int> _chunkSeq = [];
     private readonly List<object> _searchIndex = [];
-    private readonly List<ChunkJob> _readyChunks = [];
+    private readonly List<string> _chunkOrder = [];
     private readonly Dictionary<string, int> _counts = new()
     {
         ["tables"] = 0, ["views"] = 0, ["procs"] = 0, ["columns"] = 0, ["procsParams"] = 0,
@@ -37,6 +37,9 @@ internal sealed class ObjectArchive
     private readonly Dictionary<string, List<string>> _byLetter = [];
 
     public int ObjectCount { get; private set; }
+
+    /// <summary>全部分块的 id,按产出顺序(供外壳注入脚本标签与单文件模式内联枚举)。</summary>
+    public IReadOnlyList<string> ChunkIds => _chunkOrder;
 
     public string? DatabaseName { get; }
     public string? ServerName { get; }
@@ -132,12 +135,12 @@ internal sealed class ObjectArchive
                 break;
         }
 
-        // 写满 → 关闭当前分块
+        // 写满 → 关闭当前分块,作业交由调用方写盘(此处不留存,保持内存有界)
         if (list.Count >= MaxObjectsPerChunk)
         {
             _byLetter[letter].Add(chunkId);
+            _chunkOrder.Add(chunkId);
             var job = new ChunkJob(chunkId, list.ToDictionary(o => KeyOf(o), o => o));
-            _readyChunks.Add(job);
             _pending.Remove(letter);
             _chunkSeq[letter] = seq + 1;
             return job;
@@ -145,9 +148,10 @@ internal sealed class ObjectArchive
         return null;
     }
 
-    /// <summary>全部对象已接收:关闭所有未满分块,返回全部待写盘作业。</summary>
+    /// <summary>全部对象已接收:关闭所有未满分块并返回这些尾块作业(满块已在 <see cref="Add"/> 返回时交给调用方)。</summary>
     public IEnumerable<ChunkJob> Complete()
     {
+        var closed = new List<ChunkJob>();
         foreach (var (letter, list) in _pending)
         {
             if (list.Count == 0) continue;
@@ -155,10 +159,11 @@ internal sealed class ObjectArchive
             var baseId = ChunkBaseOf(letter);
             var chunkId = seq == 0 ? baseId : $"{baseId}-{seq + 1}";
             _byLetter[letter].Add(chunkId);
-            _readyChunks.Add(new ChunkJob(chunkId, list.ToDictionary(o => KeyOf(o), o => o)));
+            _chunkOrder.Add(chunkId);
+            closed.Add(new ChunkJob(chunkId, list.ToDictionary(o => KeyOf(o), o => o)));
         }
         _pending.Clear();
-        return _readyChunks;
+        return closed;
     }
 
     /// <summary>搜索索引 + 站点元数据,供前端启动即载。</summary>

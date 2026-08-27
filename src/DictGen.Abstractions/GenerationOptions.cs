@@ -18,9 +18,6 @@ public sealed class GenerationOptions
 
     public bool IncludeProcedures { get; set; } = true;
 
-    /// <summary>是否读取表行数(来自系统分区统计,开销很小)。</summary>
-    public bool IncludeRowCounts { get; set; } = true;
-
     /// <summary>是否读取视图/存储过程定义文本。</summary>
     public bool IncludeObjectDefinitions { get; set; } = true;
 
@@ -32,7 +29,4 @@ public sealed class GenerationOptions
 
     /// <summary>只生成指定 schema 下的对象;为空表示全部。</summary>
     public List<string> SchemaFilter { get; set; } = [];
-
-    /// <summary>对象名包含过滤(忽略大小写);为空表示全部。</summary>
-    public List<string> ObjectNameFilter { get; set; } = [];
 }

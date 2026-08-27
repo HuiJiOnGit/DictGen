@@ -1,11 +1,10 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using DictGen.Abstractions;
-using System.Threading.Channels;
 using DictGen.Abstractions.Models;
 using Microsoft.Data.SqlClient;
 
-namespace DictGen.EFCore.SqlServer;
+namespace DictGen.SqlServer;
 
 /// <summary>
 /// SqlServerSchemaProvider 的表相关 partial:清单、字段、索引、外键。
@@ -30,12 +29,14 @@ internal sealed partial class SqlServerSchemaProvider
         Logger.LogInformation("🔗 字段 {Cols} 条, 索引 {Ix} 条, 外键 {Fk} 条",
             colDict.Values.Sum(c => c.Count), ixDict.Values.Sum(i => i.Count), fkDict.Values.Sum(f => f.Count));
 
+        // 字典键必须带 schema:多 schema 下同名表(如 dbo.Users / sales.Users)仅按表名会数据错配
+        var tableKeyOf = (TableInfo t) => $"{t.Schema}.{t.Name}";
         for (var i = 0; i < tables.Count; i++)
         {
             var t = tables[i];
-            t.Columns = colDict.GetValueOrDefault(t.Name, []);
-            t.Indexes = ixDict.GetValueOrDefault(t.Name, []);
-            t.ForeignKeys = fkDict.GetValueOrDefault(t.Name, []);
+            t.Columns = colDict.GetValueOrDefault(tableKeyOf(t), []);
+            t.Indexes = ixDict.GetValueOrDefault(tableKeyOf(t), []);
+            t.ForeignKeys = fkDict.GetValueOrDefault(tableKeyOf(t), []);
             await channel.Writer.WriteAsync(new SchemaObject { Kind = SchemaObjectKind.Table, Table = t }, ct);
 
             if ((i + 1) % 50 == 0 || i == tables.Count - 1)
@@ -92,13 +93,14 @@ internal sealed partial class SqlServerSchemaProvider
                     SELECT 1 FROM sys.indexes i
                     INNER JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
                     WHERE i.object_id=c.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id
-                ) THEN 1 ELSE 0 END AS PK
+                ) THEN 1 ELSE 0 END AS PK,
+                OBJECT_SCHEMA_NAME(c.object_id) AS SchemaName
             FROM sys.columns c
             INNER JOIN sys.tables t ON c.object_id = t.object_id
             INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id
             LEFT JOIN sys.extended_properties ep ON ep.major_id=c.object_id AND ep.minor_id=c.column_id AND ep.name='MS_Description'
             LEFT JOIN sys.default_constraints dc ON dc.parent_object_id=c.object_id AND dc.parent_column_id=c.column_id
-            ORDER BY OBJECT_NAME(c.object_id), c.column_id
+            ORDER BY OBJECT_SCHEMA_NAME(c.object_id), OBJECT_NAME(c.object_id), c.column_id
             """;
 
         var result = new Dictionary<string, List<ColumnInfo>>();
@@ -117,29 +119,30 @@ internal sealed partial class SqlServerSchemaProvider
                 DefaultValue = r.IsDBNull(10) ? null : r.GetString(10),
                 IsPrimaryKey = r.GetInt32(11) == 1,
             };
-            var tn = r.GetString(0);
+            var tn = $"{r.GetString(12)}.{r.GetString(0)}";
             if (!result.TryGetValue(tn, out var l)) result[tn] = l = [];
             l.Add(col);
         }
         return result;
     }
 
-    private static async Task<Dictionary<string, List<IndexInfo>>> ReadAllIndexesAsync(SqlConnection conn, CancellationToken ct)
+    private async Task<Dictionary<string, List<IndexInfo>>> ReadAllIndexesAsync(SqlConnection conn, CancellationToken ct)
     {
         var sql = """
             SELECT OBJECT_NAME(i.object_id), i.name, i.is_unique, i.is_primary_key, i.type_desc, i.filter_definition,
                 STRING_AGG(CASE WHEN ic.is_included_column=0 THEN c.name END, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal),
-                STRING_AGG(CASE WHEN ic.is_included_column=1 THEN c.name END, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal)
+                STRING_AGG(CASE WHEN ic.is_included_column=1 THEN c.name END, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal),
+                OBJECT_SCHEMA_NAME(i.object_id) AS SchemaName
             FROM sys.indexes i
             INNER JOIN sys.tables t ON i.object_id = t.object_id
             LEFT JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
             LEFT JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
             WHERE i.type IN (1,2) AND i.name IS NOT NULL
             GROUP BY i.object_id, i.name, i.is_unique, i.is_primary_key, i.type_desc, i.filter_definition
-            ORDER BY OBJECT_NAME(i.object_id)
+            ORDER BY OBJECT_SCHEMA_NAME(i.object_id), OBJECT_NAME(i.object_id)
             """;
         var result = new Dictionary<string, List<IndexInfo>>();
-        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 300 };
+        await using var cmd = Cmd(conn, sql);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
         {
@@ -151,27 +154,28 @@ internal sealed partial class SqlServerSchemaProvider
                 Columns = r.IsDBNull(6) ? [] : r.GetString(6).Split(", "),
                 IncludedColumns = r.IsDBNull(7) ? [] : r.GetString(7).Split(", "),
             };
-            var tn = r.GetString(0);
+            var tn = $"{r.GetString(8)}.{r.GetString(0)}";
             if (!result.TryGetValue(tn, out var l)) result[tn] = l = [];
             l.Add(idx);
         }
         return result;
     }
 
-    private static async Task<Dictionary<string, List<ForeignKeyInfo>>> ReadAllForeignKeysAsync(SqlConnection conn, CancellationToken ct)
+    private async Task<Dictionary<string, List<ForeignKeyInfo>>> ReadAllForeignKeysAsync(SqlConnection conn, CancellationToken ct)
     {
         var sql = """
             SELECT OBJECT_NAME(fk.parent_object_id), fk.name,
                 OBJECT_SCHEMA_NAME(fk.referenced_object_id)+'.'+OBJECT_NAME(fk.referenced_object_id),
                 STRING_AGG(COL_NAME(fkc.parent_object_id,fkc.parent_column_id), ', ') WITHIN GROUP (ORDER BY fkc.constraint_column_id),
                 STRING_AGG(COL_NAME(fkc.referenced_object_id,fkc.referenced_column_id), ', ') WITHIN GROUP (ORDER BY fkc.constraint_column_id),
-                fk.delete_referential_action_desc, fk.update_referential_action_desc
+                fk.delete_referential_action_desc, fk.update_referential_action_desc,
+                OBJECT_SCHEMA_NAME(fk.parent_object_id) AS SchemaName
             FROM sys.foreign_keys fk
             INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id=fk.object_id
             GROUP BY fk.parent_object_id, fk.referenced_object_id, fk.name, fk.delete_referential_action_desc, fk.update_referential_action_desc
             """;
         var result = new Dictionary<string, List<ForeignKeyInfo>>();
-        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 300 };
+        await using var cmd = Cmd(conn, sql);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
         {
@@ -183,7 +187,7 @@ internal sealed partial class SqlServerSchemaProvider
                 OnDeleteAction = r.IsDBNull(5) ? null : r.GetString(5),
                 OnUpdateAction = r.IsDBNull(6) ? null : r.GetString(6),
             };
-            var tn = r.GetString(0);
+            var tn = $"{r.GetString(7)}.{r.GetString(0)}";
             if (!result.TryGetValue(tn, out var l)) result[tn] = l = [];
             l.Add(fk);
         }
@@ -201,9 +205,9 @@ internal sealed partial class SqlServerSchemaProvider
         var fk = await ReadAllForeignKeysAsync(conn, ct);
         foreach (var t in tables)
         {
-            t.Columns = cols.GetValueOrDefault(t.Name, []);
-            t.Indexes = ix.GetValueOrDefault(t.Name, []);
-            t.ForeignKeys = fk.GetValueOrDefault(t.Name, []);
+            t.Columns = cols.GetValueOrDefault($"{t.Schema}.{t.Name}", []);
+            t.Indexes = ix.GetValueOrDefault($"{t.Schema}.{t.Name}", []);
+            t.ForeignKeys = fk.GetValueOrDefault($"{t.Schema}.{t.Name}", []);
         }
         return tables;
     }

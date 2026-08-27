@@ -1,14 +1,12 @@
 using System.Threading.Channels;
-using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using DictGen.Abstractions;
 using DictGen.Abstractions.Models;
 using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
-namespace DictGen.EFCore.SqlServer;
+namespace DictGen.SqlServer;
 
 /// <summary>
 /// SQL Server 数据库结构提供器。
@@ -17,19 +15,20 @@ namespace DictGen.EFCore.SqlServer;
 /// </summary>
 internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchemaInfoProvider
 {
-    private const int DefinitionBatchSize = 50;
+    // object_id 为 int,IN 列表开销极小;500 一批把大库的串行往返从几十次压到个位数
+    private const int DefinitionBatchSize = 500;
     private const int CommandTimeoutSeconds = 300;
 
     private GenerationOptions Options { get; }
     private ILogger<SqlServerSchemaProvider> Logger { get; }
-    private IDbContextFactory<SchemaDbContext> ContextFactory { get; }
+    private string ConnectionString { get; }
 
     public SqlServerSchemaProvider(
-        IDbContextFactory<SchemaDbContext> contextFactory,
+        DatabaseOptions databaseOptions,
         GenerationOptions options,
         ILogger<SqlServerSchemaProvider> logger)
     {
-        ContextFactory = contextFactory;
+        ConnectionString = databaseOptions.ConnectionString;
         Options = options;
         Logger = logger;
     }
@@ -37,10 +36,10 @@ internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchema
     private SqlCommand Cmd(SqlConnection conn, string sql) =>
         new(sql, conn) { CommandTimeout = CommandTimeoutSeconds };
 
+    /// <summary>打开一个新连接执行 action(ADO.NET 连接池兜底复用)。</summary>
     private async Task<T> WithConnAsync<T>(Func<SqlConnection, CancellationToken, Task<T>> action, CancellationToken ct)
     {
-        await using var ctx = await ContextFactory.CreateDbContextAsync(ct);
-        var conn = (SqlConnection)ctx.Database.GetDbConnection();
+        await using var conn = new SqlConnection(ConnectionString);
         await conn.OpenAsync(ct);
         return await action(conn, ct);
     }
@@ -61,8 +60,7 @@ internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchema
     public async Task<DatabaseSchema> GetSchemaAsync(CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
-        await using var ctx = await ContextFactory.CreateDbContextAsync(ct);
-        var conn = (SqlConnection)ctx.Database.GetDbConnection();
+        await using var conn = new SqlConnection(ConnectionString);
         await conn.OpenAsync(ct);
         var (server, ver) = await GetServerInfoAsync(conn, ct);
         var db = conn.Database;
@@ -96,7 +94,13 @@ internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchema
         if (Options.IncludeViews) tasks.Add(ProduceViewsAsync(channel, progress, ct));
         if (Options.IncludeProcedures) tasks.Add(ProduceProceduresAsync(channel, progress, ct));
 
-        _ = Task.WhenAll(tasks).ContinueWith(_ => channel.Writer.TryComplete(), ct);
+        // 生产者异常必须经 channel 传给消费者:静默完成会产出残缺字典且退出码为 0
+        _ = Task.WhenAll(tasks).ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                Logger.LogError(t.Exception, "读库生产者异常,提前结束对象流");
+            channel.Writer.TryComplete(t.IsFaulted ? t.Exception : null);
+        }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
         await foreach (var obj in channel.Reader.ReadAllAsync(ct))
             yield return obj;

@@ -1,11 +1,10 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using DictGen.Abstractions;
-using System.Threading.Channels;
 using DictGen.Abstractions.Models;
 using Microsoft.Data.SqlClient;
 
-namespace DictGen.EFCore.SqlServer;
+namespace DictGen.SqlServer;
 
 /// <summary>
 /// SqlServerSchemaProvider 的视图相关 partial。
@@ -38,7 +37,8 @@ internal sealed partial class SqlServerSchemaProvider
             if ((i + 1) % 25 == 0 || i == views.Count - 1)
             {
                 Logger.LogInformation("👁️ 视图 {Done}/{Total}", i + 1, views.Count);
-                progress?.Report(new SchemaProgress(SchemaReadStage.ReadingViews, i + 1, views.Count, 15 + 10));
+                progress?.Report(new SchemaProgress(SchemaReadStage.ReadingViews, i + 1, views.Count,
+                    15 + 10 * (i + 1) / views.Count));
             }
         }
     }

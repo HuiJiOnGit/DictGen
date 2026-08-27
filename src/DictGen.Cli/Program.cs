@@ -1,6 +1,6 @@
 using DictGen.Abstractions;
 using DictGen.Cli;
-using DictGen.EFCore.SqlServer;
+using DictGen.SqlServer;
 using DictGen.Generators.StaticSite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,10 +12,13 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 var builder = Host.CreateApplicationBuilder(args);
 
 // 控制台应用的工作目录不一定是程序目录,显式加载程序目录下的 appsettings.json。
-// 注意:必须插入到配置源的最前面,保证环境变量 / 命令行参数仍可覆盖文件配置。
+// 注意:必须显式指定 FileProvider —— 裸 JsonConfigurationSource 会退回到内容根目录的
+// 文件提供器,无法解析绝对路径,Optional=true 时会静默跳过导致整个文件不生效。
+// 插入到最前面保证环境变量 / 命令行参数仍可覆盖文件配置。
 builder.Configuration.Sources.Insert(0, new Microsoft.Extensions.Configuration.Json.JsonConfigurationSource
 {
-    Path = Path.Combine(AppContext.BaseDirectory, "appsettings.json"),
+    Path = "appsettings.json",
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(AppContext.BaseDirectory),
     Optional = true,
     ReloadOnChange = false,
 });
@@ -48,7 +51,7 @@ else
         Console.Error.WriteLine("未配置连接串: 请编辑 appsettings.json 的 Database:ConnectionString,或使用 --sample 运行示例。");
         return 2;
     }
-    builder.Services.AddSqlServerProvider(databaseOptions.ConnectionString);
+    builder.Services.AddSqlServerProvider();
 }
 
 builder.Services.AddHostedService<DictionaryGenerationService>();

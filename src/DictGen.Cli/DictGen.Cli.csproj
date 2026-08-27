@@ -10,7 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DictGen.Abstractions\DictGen.Abstractions.csproj" />
-    <ProjectReference Include="..\DictGen.EFCore.SqlServer\DictGen.EFCore.SqlServer.csproj" />
+    <ProjectReference Include="..\DictGen.SqlServer\DictGen.SqlServer.csproj" />
     <ProjectReference Include="..\DictGen.Generators.StaticSite\DictGen.Generators.StaticSite.csproj" />
   </ItemGroup>
 
