@@ -34,7 +34,7 @@ DictGen/
 │   ├── DictGen.Abstractions/          # 抽象层:接口 + 数据库无关模型
 │   │   ├── ISchemaProvider.cs             # 流式接口 → IAsyncEnumerable<SchemaObject>
 │   │   ├── ISchemaInfoProvider.cs         # 连接信息(库名/服务器/版本)
-│   │   ├── IDataDictionaryGenerator.cs    # 产物生成器接口(全量 + 流式)
+│   │   ├── IDataDictionaryGenerator.cs    # 产物生成器接口(流式)
 │   │   ├── GenerationOptions.cs / DatabaseOptions.cs
 │   │   └── Models/                        # Table/View/Procedure/Column/Index/FK/SchemaObject...
 │   ├── DictGen.SqlServer/            # SQL Server 提供器(partial 多文件拆分,原生 T-SQL)
@@ -229,35 +229,6 @@ pnpm build          # 生产构建 → 输出到 ../output/(index.html / app.js 
 
 ---
 
-## 🧩 扩展指南
-
-### 新增数据库提供器(如 PostgreSQL)
-
-1. 新建类库 `DictGen.PostgreSql`(已存在占位),实现:
-
-```csharp
-public sealed class PostgreSqlSchemaProvider : ISchemaProvider, ISchemaInfoProvider
-{
-    public Task<DatabaseSchema> GetSchemaAsync(CancellationToken ct = default) { ... }
-    public IAsyncEnumerable<SchemaObject> EnumerateObjectsAsync(
-        IProgress<SchemaProgress>? progress = null, CancellationToken ct = default) { ... }
-    public Task<SchemaSourceInfo> GetSourceInfoAsync(CancellationToken ct = default) { ... }
-}
-```
-
-2. 提供 DI 注册扩展(键名自定义,如 `"PostgreSql"`),在主程序 `Program.cs` 按需注册。
-3. `appsettings.json` 的 `Database:Provider` 改为对应键名。
-
-数据库无关模型见 `DictGen.Abstractions/Models/`,所有字段均可选填。流式接口实现可参考 `DictGen.SqlServer`(partial 拆分:Tables/Views/Procedures)。
-
-### 新增产物生成器(如 Markdown / PDF)
-
-1. 实现 `IDataDictionaryGenerator`(全量 `GenerateAsync(schema, options, ct)` + 流式 `GenerateAsync(IAsyncEnumerable<SchemaObject>, options, sourceInfo, ct)`)。
-2. 注册键控 DI,`Generation:Generator` 指定键名。
-3. 前端数据契约(`window.__DICT` / `__DICT_CHUNK`)可复用,详见 `ObjectArchive.cs` 注释。
-
----
-
 ## ❓ 常见问题
 
 **Q: 重新生成后浏览器还是旧页面?**
@@ -276,19 +247,4 @@ public sealed class PostgreSqlSchemaProvider : ISchemaProvider, ISchemaInfoProvi
 仅一个自包含 `index.html`(样式/逻辑/全部数据内联),拷贝单个文件即可分发。
 
 **Q: 存储过程/视图的定义文本哪里来?**
-`IncludeObjectDefinitions: true` 时从 `sys.sql_modules` 分批读取(每批 50 个,避免单查询超时);搜索结果会索引并预览定义内容。
-
----
-
-## 📦 产物结构(分块 SPA)
-
-```
-output/
-├── index.html            # 应用外壳(双击即开;含分块脚本静态注入)
-├── app.js                # 前端逻辑(IIFE, 非 module, file:// 兼容)
-├── style.css             # 主题样式
-└── data/
-    ├── search-index.js   # 搜索索引 + 站点元数据(启动即载)
-    ├── A.js …            # 按首字母分块的数据(含对象详情)
-    └── …
-```
+`IncludeObjectDefinitions: true` 时从 `sys.sql_modules` 分批读取(每批 500 个、并发 4 批;经 `COMPRESS` 以 GZIP 传输、客户端解压);搜索结果会索引并预览定义内容。全量字段/定义文本这类大结果集在远程库上均走压缩单值通道,目录查询带 HASH JOIN 提示避免逐行探测的随机 IO。**生成目标库需要 SQL Server 2016+**(`COMPRESS`/`FOR JSON`)。

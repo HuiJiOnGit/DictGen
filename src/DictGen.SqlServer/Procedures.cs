@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using DictGen.Abstractions;
@@ -16,13 +17,14 @@ internal sealed partial class SqlServerSchemaProvider
     private async Task ProduceProceduresAsync(
         Channel<SchemaObject> channel, IProgress<SchemaProgress>? progress, CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         var procs = await WithConnAsync(ReadProcListAsync, ct);
         if (procs.Count == 0) return;
         Logger.LogInformation("⚙️ 过程清单: {Count} 个", procs.Count);
 
         var ids = procs.Select(p => p.ObjectId).ToList();
         var defTask = Options.IncludeObjectDefinitions
-            ? WithConnAsync((c, t) => LoadDefinitionsAsync(c, ids, t), ct)
+            ? LoadDefinitionsAsync(ids, ct)
             : Task.FromResult(new Dictionary<int, string?>());
         var paramTask = WithConnAsync(ReadProcParamsAsync, ct);
         await Task.WhenAll(defTask, paramTask);
@@ -41,6 +43,7 @@ internal sealed partial class SqlServerSchemaProvider
                     15 + 10 * (i + 1) / procs.Count));
             }
         }
+        Logger.LogInformation("⚙️ 过程生产者完成,耗时 {Elapsed:F1}s", sw.Elapsed.TotalSeconds);
     }
 
     private async Task<List<ProcedureInfo>> ReadProcListAsync(SqlConnection conn, CancellationToken ct)
@@ -80,6 +83,8 @@ internal sealed partial class SqlServerSchemaProvider
             LEFT JOIN sys.default_constraints dc ON dc.parent_object_id=p.object_id AND dc.parent_column_id=p.parameter_id
             WHERE p.parameter_id>0 AND pr.is_ms_shipped=0
             ORDER BY p.object_id, p.parameter_id
+            -- HASH JOIN 强制各目录表一次扫描,避免逐行嵌套探测的随机 IO(同 Tables 全量字段)
+            OPTION (HASH JOIN, FORCE ORDER)
             """;
         var result = new Dictionary<int, List<ParameterInfo>>();
         await using var cmd = Cmd(conn, sql);
@@ -97,20 +102,5 @@ internal sealed partial class SqlServerSchemaProvider
             l.Add(param);
         }
         return result;
-    }
-
-    // ========== 非流式向后兼容 ==========
-
-    private async Task<List<ProcedureInfo>> FetchProceduresAsync(SqlConnection conn, CancellationToken ct)
-    {
-        var procs = await ReadProcListAsync(conn, ct);
-        if (procs.Count == 0) return procs;
-        var ids = procs.Select(p => p.ObjectId).ToList();
-        var defTask = Options.IncludeObjectDefinitions ? LoadDefinitionsAsync(conn, ids, ct) : Task.FromResult(new Dictionary<int, string?>());
-        var paramTask = ReadProcParamsAsync(conn, ct);
-        await Task.WhenAll(defTask, paramTask);
-        var defs = await defTask; var prms = await paramTask;
-        foreach (var p in procs) { p.Definition = defs.GetValueOrDefault(p.ObjectId); p.Parameters = prms.GetValueOrDefault(p.ObjectId, []); }
-        return procs;
     }
 }

@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using System.Text;
 using System.Threading.Channels;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -17,6 +19,9 @@ internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchema
 {
     // object_id 为 int,IN 列表开销极小;500 一批把大库的串行往返从几十次压到个位数
     private const int DefinitionBatchSize = 500;
+
+    // 批与批之间无依赖,有界并发把远程库的批次往返从串行压成并发组
+    private const int DefinitionBatchConcurrency = 4;
     private const int CommandTimeoutSeconds = 300;
 
     private GenerationOptions Options { get; }
@@ -56,28 +61,6 @@ internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchema
     }
 
     // ========== 入口 ==========
-
-    public async Task<DatabaseSchema> GetSchemaAsync(CancellationToken ct = default)
-    {
-        var sw = Stopwatch.StartNew();
-        await using var conn = new SqlConnection(ConnectionString);
-        await conn.OpenAsync(ct);
-        var (server, ver) = await GetServerInfoAsync(conn, ct);
-        var db = conn.Database;
-
-        var tTask = Options.IncludeTables ? FetchTablesAsync(conn, ct) : Task.FromResult(new List<TableInfo>());
-        var vTask = Options.IncludeViews ? FetchViewsAsync(conn, ct) : Task.FromResult(new List<ViewInfo>());
-        var pTask = Options.IncludeProcedures ? FetchProceduresAsync(conn, ct) : Task.FromResult(new List<ProcedureInfo>());
-        await Task.WhenAll(tTask, vTask, pTask);
-
-        Logger.LogInformation("🏁 结构读取完成: {Tables} 表, {Views} 视图, {Procs} 过程, 耗时 {Elapsed}",
-            (await tTask).Count, (await vTask).Count, (await pTask).Count, sw.Elapsed);
-        return new DatabaseSchema
-        {
-            DatabaseName = db, ServerName = server, ServerVersion = ver,
-            Tables = await tTask, Views = await vTask, Procedures = await pTask,
-        };
-    }
 
     public async IAsyncEnumerable<SchemaObject> EnumerateObjectsAsync(
         IProgress<SchemaProgress>? progress = null,
@@ -119,20 +102,79 @@ internal sealed partial class SqlServerSchemaProvider : ISchemaProvider, ISchema
         return ("(Unknown)", null);
     }
 
-    private async Task<Dictionary<int, string?>> LoadDefinitionsAsync(
-        SqlConnection conn, IReadOnlyList<int> ids, CancellationToken ct)
+    /// <summary>解压 COMPRESS 的 GZIP 载荷。</summary>
+    private static byte[] DecompressGzip(byte[] compressed)
     {
-        var defs = new Dictionary<int, string?>();
+        using var src = new MemoryStream(compressed);
+        using var gz = new GZipStream(src, CompressionMode.Decompress);
+        using var dst = new MemoryStream(compressed.Length * 2);
+        gz.CopyTo(dst);
+        return dst.ToArray();
+    }
+
+    /// <summary>
+    /// 并行加载定义文本:按 <see cref="DefinitionBatchSize"/> 切批(索引切片,避免 Skip 的 O(n²)),
+    /// 每批独立连接、按 <see cref="DefinitionBatchConcurrency"/> 有界并发,结果按 object_id 合并
+    /// (各批键互不相交)。经 COMPRESS 以 GZIP 传输、客户端解压(文本逐字节一致),
+    /// 实测远程库瓶颈为聚合带宽而非往返次数,压缩是唯一有效的提速手段。
+    /// </summary>
+    private async Task<Dictionary<int, string?>> LoadDefinitionsAsync(
+        IReadOnlyList<int> ids, CancellationToken ct)
+    {
+        var defs = new Dictionary<int, string?>(ids.Count);
+        if (ids.Count == 0) return defs;
+
+        var batches = new List<List<int>>();
         for (var i = 0; i < ids.Count; i += DefinitionBatchSize)
         {
-            var batch = ids.Skip(i).Take(DefinitionBatchSize).ToList();
-            var idsSql = string.Join(",", batch);
-            await using var cmd = Cmd(conn,
-                $"SELECT object_id, definition FROM sys.sql_modules WHERE object_id IN ({idsSql})");
-            await using var r = await cmd.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct))
-                defs[r.GetInt32(0)] = r.IsDBNull(1) ? null : r.GetString(1);
+            var take = Math.Min(DefinitionBatchSize, ids.Count - i);
+            var batch = new List<int>(take);
+            for (var j = i; j < i + take; j++) batch.Add(ids[j]);
+            batches.Add(batch);
         }
+
+        var sw = Stopwatch.StartNew();
+        long transferred = 0;
+        using var gate = new SemaphoreSlim(DefinitionBatchConcurrency);
+        var batchIndex = 0;
+        var batchDefs = await Task.WhenAll(batches.Select(async batch =>
+        {
+            var bsw = Stopwatch.StartNew();
+            await gate.WaitAsync(ct);
+            try
+            {
+                await using var conn = new SqlConnection(ConnectionString);
+                await conn.OpenAsync(ct);
+                var result = new Dictionary<int, string?>(batch.Count);
+                var idsSql = string.Join(",", batch);
+                await using var cmd = Cmd(conn,
+                    $"SELECT object_id, COMPRESS(definition) FROM sys.sql_modules WHERE object_id IN ({idsSql})");
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                {
+                    var payload = r.IsDBNull(1) ? null : (byte[])r.GetValue(1);
+                    Interlocked.Add(ref transferred, payload?.Length ?? 0);
+                    result[r.GetInt32(0)] = payload is null
+                        ? null
+                        : Encoding.Unicode.GetString(DecompressGzip(payload));
+                }
+
+                Logger.LogInformation("📄 定义批次 {Index}/{Total}({Count} 项)耗时 {Elapsed:F1}s",
+                    Interlocked.Increment(ref batchIndex), batches.Count, batch.Count, bsw.Elapsed.TotalSeconds);
+                return result;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }));
+        foreach (var result in batchDefs)
+            foreach (var kv in result)
+                defs[kv.Key] = kv.Value;
+
+        Logger.LogInformation("📄 定义文本 {Count} 项 / {Batches} 批(并发 {Concurrency}, gzip)耗时 {Elapsed:F1}s, 传输约 {Mb:F1} MB",
+            ids.Count, batches.Count, DefinitionBatchConcurrency, sw.Elapsed.TotalSeconds,
+            transferred / 1024.0 / 1024.0);
         return defs;
     }
 

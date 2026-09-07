@@ -8,9 +8,6 @@ namespace DictGen.Abstractions;
 /// </summary>
 public interface ISchemaProvider
 {
-    /// <summary>一次性读取全部结构(兼容简单场景)。</summary>
-    Task<DatabaseSchema> GetSchemaAsync(CancellationToken cancellationToken = default);
-
     /// <summary>
     /// 流式读取全部对象:内部按 表/视图/存储过程 并行读取,
     /// 逐对象产出,支持生成器边读边生成,避免全量载入内存。

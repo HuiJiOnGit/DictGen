@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -12,9 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace DictGen.Generators.StaticSite;
 
 /// <summary>
-/// 静态站点生成器:支持流式(边读边生成)与全量两种模式。
-///
-/// 流式模式:通过 Channel 多消费者:
+/// 静态站点生成器:流式管线,通过 Channel 多消费者:
 /// 生产者将 SchemaObject 送入 ObjectArchive → 分块写满即产出 ChunkJob
 /// → 入写盘 Channel → 多个 writer 任务并发写 .js 分块文件。
 /// 待全部对象消费完毕:最终写出搜索索引 + 外壳(index.html/app.js/style.css)。
@@ -32,8 +31,6 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
     private ILogger<StaticSiteGenerator> Logger { get; }
     private GenerationOptions Options { get; set; } = default!;
 
-    public StaticSiteGenerator() => Logger = null!; // 用于简单场景
-
     public StaticSiteGenerator(ILogger<StaticSiteGenerator> logger)
     {
         Logger = logger;
@@ -45,36 +42,6 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
     /// <summary>原始外壳(vite 构建产物)的判别特征:分块占位符与外部 app.js 引用并存;被生成器处理过之后至少其一消失。</summary>
     private static bool IsPristineShell(string html) =>
         html.Contains("<!--DICT_CHUNKS-->") && html.Contains("<script src=\"./app.js\"></script>");
-
-    // ---------- 全量模式(向后兼容) ----------
-
-    public async Task<GenerationResult> GenerateAsync(
-        DatabaseSchema schema,
-        GenerationOptions options,
-        CancellationToken ct = default)
-    {
-        Options = options;
-        PrepareOutputDirectory();
-
-        var archive = new ObjectArchive(schema);
-
-        async Task AddAndFlushAsync(SchemaObject obj)
-        {
-            // 满块立即写盘:同一字母超过单块容量的部分不能依赖 Complete(),否则会丢数据
-            if (archive.Add(obj) is { } job)
-                await WriteChunkFileAsync(job, ct);
-        }
-
-        foreach (var t in schema.Tables) await AddAndFlushAsync(new SchemaObject { Kind = SchemaObjectKind.Table, Table = t });
-        foreach (var v in schema.Views) await AddAndFlushAsync(new SchemaObject { Kind = SchemaObjectKind.View, View = v });
-        foreach (var p in schema.Procedures) await AddAndFlushAsync(new SchemaObject { Kind = SchemaObjectKind.Procedure, Procedure = p });
-
-        // 写尾块
-        foreach (var job in archive.Complete())
-            await WriteChunkFileAsync(job, ct);
-
-        return await WriteAllAsync(archive, ct);
-    }
 
     // ---------- 流式模式 ----------
 
@@ -130,6 +97,7 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
         ChannelWriter<ChunkJob> writer,
         CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         var processed = 0;
         await foreach (var obj in objects.WithCancellation(ct))
         {
@@ -141,7 +109,7 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
             if (processed % 200 == 0)
                 Logger?.LogInformation("📦 已归档 {Count} 个对象", processed);
         }
-        Logger?.LogInformation("📦 归档完成: 共 {Count} 个对象", processed);
+        Logger?.LogInformation("📦 归档完成: 共 {Count} 个对象, 耗时 {Elapsed:F1}s", processed, sw.Elapsed.TotalSeconds);
     }
 
     /// <summary>写盘消费者。</summary>
@@ -159,16 +127,17 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
     {
         var outputDir = Path.GetFullPath(Options.OutputDirectory);
         var dataDir = Path.Combine(outputDir, "data");
-        // 保留前端构建的 index.html/app.js/style.css,只重建数据目录
+        // 保留前端构建的 index.html/app.js/style.css,只重建数据目录;
+        // data 目录无条件创建:单文件模式下分块也会先落盘再被内联读取
         if (Options.CleanOutputDirectory && Directory.Exists(dataDir))
             Directory.Delete(dataDir, recursive: true);
         Directory.CreateDirectory(outputDir);
-        if (!Options.EmbedSingleFile)
-            Directory.CreateDirectory(dataDir);
+        Directory.CreateDirectory(dataDir);
     }
 
     private async Task<GenerationResult> WriteAllAsync(ObjectArchive archive, CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         var outputDir = Path.GetFullPath(Options.OutputDirectory);
         var dataDir = Path.Combine(outputDir, "data");
 
@@ -192,8 +161,8 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
             ? await WriteEmbeddedAsync(archive, outputDir, dataDir, indexScript, ct)
             : await WriteChunkedShellAsync(archive, outputDir, dataDir, indexScript, ct);
 
-        Logger?.LogInformation("🎉 生成完成: {Files} 个文件, {Size:F2} MB, 输出 → {Dir}",
-            fileCount, totalBytes / 1024.0 / 1024.0, outputDir);
+        Logger?.LogInformation("🎉 生成完成: {Files} 个文件, {Size:F2} MB, 收尾耗时 {Elapsed:F1}s, 输出 → {Dir}",
+            fileCount, totalBytes / 1024.0 / 1024.0, sw.Elapsed.TotalSeconds, outputDir);
 
         return new GenerationResult
         {
@@ -319,17 +288,24 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
         if (shell is not null)
         {
             var html = InjectChunkScripts(shell, chunkScriptTags);
+            if (html is null)
+            {
+                Logger?.LogWarning(
+                    "⚠️ 外壳缺少 <!--DICT_CHUNKS--> 占位符(非原始前端构建产物),已跳过 index.html 注入。请重新执行前端构建后再生成。");
+            }
+            else
+            {
+                // 版本号参数避免浏览器缓存旧前端
+                html = Regex.Replace(html, "<script src=\"\\./app\\.js\"></script>",
+                    _ => "<script src=\"./app.js?v=" + ver + "\"></script>");
+                html = Regex.Replace(html, "href=\"\\./style\\.css\"",
+                    _ => "href=\"./style.css?v=" + ver + "\"");
 
-            // 版本号参数避免浏览器缓存旧前端(兼容上次已带版本号的标签)
-            html = Regex.Replace(html, "<script src=\"\\./app\\.js(?:\\?v=\\d+)?\"></script>",
-                _ => "<script src=\"./app.js?v=" + ver + "\"></script>");
-            html = Regex.Replace(html, "href=\"\\./style\\.css(?:\\?v=\\d+)?\"",
-                _ => "href=\"./style.css?v=" + ver + "\"");
-
-            await File.WriteAllTextAsync(Path.Combine(outputDir, "index.html"), html,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
-            totalBytes += Encoding.UTF8.GetByteCount(html);
-            fileCount++;
+                await File.WriteAllTextAsync(Path.Combine(outputDir, "index.html"), html,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
+                totalBytes += Encoding.UTF8.GetByteCount(html);
+                fileCount++;
+            }
         }
         return (totalBytes, fileCount);
     }
@@ -337,25 +313,23 @@ public sealed class StaticSiteGenerator : IDataDictionaryGenerator
     /// <summary>
     /// 把分块脚本清单注入外壳 html,幂等可重复生成:
     /// 首次替换 <c>&lt;!--DICT_CHUNKS--&gt;</c> 占位符并保留边界标记;
-    /// 之后整体替换标记区间;兼容历史产物(占位符已被无标记地替换为脚本标签)。
+    /// 之后整体替换标记区间。外壳无占位符时返回 null(由调用方告警)。
     /// </summary>
-    private static string InjectChunkScripts(string html, string chunkScriptTags)
+    private static string? InjectChunkScripts(string html, string chunkScriptTags)
     {
         var block = $"<!--DICT_CHUNKS-->\n{chunkScriptTags}\n<!--/DICT_CHUNKS-->";
         if (html.Contains("<!--/DICT_CHUNKS-->"))
             return Regex.Replace(html, "<!--DICT_CHUNKS-->[\\s\\S]*?<!--/DICT_CHUNKS-->", _ => block);
         if (html.Contains("<!--DICT_CHUNKS-->"))
             return html.Replace("<!--DICT_CHUNKS-->", block);
-        return Regex.Replace(html, "(?:\\s*<script src=\"data/[^\"]+\\.js\"></script>)+",
-            _ => "\n" + chunkScriptTags + "\n");
+        return null;
     }
 
-    /// <summary>写入一个分块文件。</summary>
+    /// <summary>写入一个分块文件(data 目录由 <see cref="PrepareOutputDirectory"/> 统一创建)。</summary>
     private async Task WriteChunkFileAsync(ChunkJob job, CancellationToken ct)
     {
         var outputDir = Path.GetFullPath(Options.OutputDirectory);
         var dataDir = Path.Combine(outputDir, "data");
-        Directory.CreateDirectory(dataDir);
 
         var chunkData = JsonSerializer.SerializeToUtf8Bytes(job.Objects, JsonOptions);
         await File.WriteAllBytesAsync(Path.Combine(dataDir, job.ChunkId + ".js"),

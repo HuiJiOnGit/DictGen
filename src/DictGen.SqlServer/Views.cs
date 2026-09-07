@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using DictGen.Abstractions;
@@ -16,13 +17,14 @@ internal sealed partial class SqlServerSchemaProvider
     private async Task ProduceViewsAsync(
         Channel<SchemaObject> channel, IProgress<SchemaProgress>? progress, CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         var views = await WithConnAsync(ReadViewListAsync, ct);
         if (views.Count == 0) return;
         Logger.LogInformation("👁️ 视图清单: {Count} 个", views.Count);
 
         var ids = views.Select(v => v.ObjectId).ToList();
         var defTask = Options.IncludeObjectDefinitions
-            ? WithConnAsync((c, t) => LoadDefinitionsAsync(c, ids, t), ct)
+            ? LoadDefinitionsAsync(ids, ct)
             : Task.FromResult(new Dictionary<int, string?>());
         var colTask = WithConnAsync(ReadViewColumnsAsync, ct);
         await Task.WhenAll(defTask, colTask);
@@ -41,6 +43,7 @@ internal sealed partial class SqlServerSchemaProvider
                     15 + 10 * (i + 1) / views.Count));
             }
         }
+        Logger.LogInformation("👁️ 视图生产者完成,耗时 {Elapsed:F1}s", sw.Elapsed.TotalSeconds);
     }
 
     private async Task<List<ViewInfo>> ReadViewListAsync(SqlConnection conn, CancellationToken ct)
@@ -72,6 +75,8 @@ internal sealed partial class SqlServerSchemaProvider
             INNER JOIN sys.types tp ON c.user_type_id=tp.user_type_id
             LEFT JOIN sys.extended_properties ep ON ep.major_id=c.object_id AND ep.minor_id=c.column_id AND ep.name='MS_Description'
             ORDER BY c.object_id, c.column_id
+            -- HASH JOIN 强制各目录表一次扫描,避免逐行嵌套探测的随机 IO(同 Tables 全量字段)
+            OPTION (HASH JOIN, FORCE ORDER)
             """;
         var result = new Dictionary<int, List<ColumnInfo>>();
         await using var cmd = Cmd(conn, sql);
@@ -90,20 +95,5 @@ internal sealed partial class SqlServerSchemaProvider
             l.Add(col);
         }
         return result;
-    }
-
-    // ========== 非流式向后兼容 ==========
-
-    private async Task<List<ViewInfo>> FetchViewsAsync(SqlConnection conn, CancellationToken ct)
-    {
-        var views = await ReadViewListAsync(conn, ct);
-        if (views.Count == 0) return views;
-        var ids = views.Select(v => v.ObjectId).ToList();
-        var defTask = Options.IncludeObjectDefinitions ? LoadDefinitionsAsync(conn, ids, ct) : Task.FromResult(new Dictionary<int, string?>());
-        var colTask = ReadViewColumnsAsync(conn, ct);
-        await Task.WhenAll(defTask, colTask);
-        var defs = await defTask; var cols = await colTask;
-        foreach (var v in views) { v.Definition = defs.GetValueOrDefault(v.ObjectId); v.Columns = cols.GetValueOrDefault(v.ObjectId, []); }
-        return views;
     }
 }

@@ -11,9 +11,6 @@ public sealed class SampleSchemaProvider : ISchemaProvider, ISchemaInfoProvider
 {
     public const string ProviderKey = "Sample";
 
-    private DatabaseSchema? _schema;
-    private object _lock = new();
-
     public Task<SchemaSourceInfo> GetSourceInfoAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new SchemaSourceInfo
         {
@@ -22,39 +19,21 @@ public sealed class SampleSchemaProvider : ISchemaProvider, ISchemaInfoProvider
             ServerVersion = "SQL Server 16.0.4100.1 (示例)",
         });
 
-    private DatabaseSchema Build()
-    {
-        if (_schema is not null) return _schema;
-        lock (_lock)
-        {
-            if (_schema is not null) return _schema;
-            _schema = new DatabaseSchema
-            {
-                DatabaseName = "SampleDB", ServerName = "本地示例", ServerVersion = "SQL Server 16.0.4100.1 (示例)",
-                Tables = [.. BuildTables()], Views = [.. BuildViews()], Procedures = [.. BuildProcedures()],
-            };
-            return _schema;
-        }
-    }
-
-    public Task<DatabaseSchema> GetSchemaAsync(CancellationToken ct = default)
-        => Task.FromResult(Build());
-
     public async IAsyncEnumerable<SchemaObject> EnumerateObjectsAsync(
         IProgress<SchemaProgress>? progress = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        foreach (var t in Build().Tables)
+        foreach (var t in BuildTables())
         {
             yield return new SchemaObject { Kind = SchemaObjectKind.Table, Table = t };
             ct.ThrowIfCancellationRequested();
         }
-        foreach (var v in Build().Views)
+        foreach (var v in BuildViews())
         {
             yield return new SchemaObject { Kind = SchemaObjectKind.View, View = v };
             ct.ThrowIfCancellationRequested();
         }
-        foreach (var p in Build().Procedures)
+        foreach (var p in BuildProcedures())
         {
             yield return new SchemaObject { Kind = SchemaObjectKind.Procedure, Procedure = p };
             ct.ThrowIfCancellationRequested();

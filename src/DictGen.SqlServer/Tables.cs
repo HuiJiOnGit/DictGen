@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using DictGen.Abstractions;
@@ -16,18 +19,39 @@ internal sealed partial class SqlServerSchemaProvider
     private async Task ProduceTablesAsync(
         Channel<SchemaObject> channel, IProgress<SchemaProgress>? progress, CancellationToken ct)
     {
-        var tables = await WithConnAsync(ReadTableListAsync, ct);
-        if (tables.Count == 0) return;
+        var sw = Stopwatch.StartNew();
+        // 清单/字段/索引/外键四个全量查询互不依赖(后三者连清单都不依赖),并行把该路耗时从求和压到最大值
+        async Task<T> TimedAsync<T>(string label, Func<SqlConnection, CancellationToken, Task<T>> action)
+        {
+            var qsw = Stopwatch.StartNew();
+            var result = await WithConnAsync(action, ct);
+            Logger.LogInformation("⏱ {Label} 耗时 {Elapsed:F1}s", label, qsw.Elapsed.TotalSeconds);
+            return result;
+        }
+
+        var listTask = TimedAsync("表清单", ReadTableListAsync);
+        var colTask = TimedAsync("全量字段", ReadAllColumnsAsync);
+        var ixTask = TimedAsync("全量索引", ReadAllIndexesAsync);
+        var fkTask = TimedAsync("全量外键", ReadAllForeignKeysAsync);
+
+        var tables = await listTask;
+        if (tables.Count == 0)
+        {
+            await Task.WhenAll(colTask, ixTask, fkTask); // 观察已启动任务,避免未观察异常
+            return;
+        }
 
         Logger.LogInformation("📋 表清单: {Count} 张", tables.Count);
         progress?.Report(new SchemaProgress(SchemaReadStage.ReadingTables, tables.Count, tables.Count, 15));
 
-        var colDict = await WithConnAsync(ReadAllColumnsAsync, ct);
-        var ixDict = await WithConnAsync(ReadAllIndexesAsync, ct);
-        var fkDict = await WithConnAsync(ReadAllForeignKeysAsync, ct);
+        await Task.WhenAll(colTask, ixTask, fkTask);
+        var colDict = await colTask;
+        var ixDict = await ixTask;
+        var fkDict = await fkTask;
 
-        Logger.LogInformation("🔗 字段 {Cols} 条, 索引 {Ix} 条, 外键 {Fk} 条",
-            colDict.Values.Sum(c => c.Count), ixDict.Values.Sum(i => i.Count), fkDict.Values.Sum(f => f.Count));
+        Logger.LogInformation("🔗 字段 {Cols} 条, 索引 {Ix} 条, 外键 {Fk} 条, 耗时 {Elapsed:F1}s",
+            colDict.Values.Sum(c => c.Count), ixDict.Values.Sum(i => i.Count), fkDict.Values.Sum(f => f.Count),
+            sw.Elapsed.TotalSeconds);
 
         // 字典键必须带 schema:多 schema 下同名表(如 dbo.Users / sales.Users)仅按表名会数据错配
         var tableKeyOf = (TableInfo t) => $"{t.Schema}.{t.Name}";
@@ -46,6 +70,7 @@ internal sealed partial class SqlServerSchemaProvider
                     15 + 65 * (i + 1) / tables.Count));
             }
         }
+        Logger.LogInformation("📊 表生产者完成,耗时 {Elapsed:F1}s", sw.Elapsed.TotalSeconds);
     }
 
     private async Task<List<TableInfo>> ReadTableListAsync(SqlConnection conn, CancellationToken ct)
@@ -80,51 +105,79 @@ internal sealed partial class SqlServerSchemaProvider
         return list;
     }
 
+    /// <summary>
+    /// 全量字段:整包 FOR JSON + COMPRESS 单值往返,替代数千行宽行的流式传输
+    /// (行内容逐字段一致,仅载体不同);HASH JOIN 强制各目录表一次扫描,
+    /// 避免逐行嵌套探测在小缓存池/低 IOPS 磁盘上的随机 IO。
+    /// </summary>
     private async Task<Dictionary<string, List<ColumnInfo>>> ReadAllColumnsAsync(SqlConnection conn, CancellationToken ct)
     {
         var sql = $"""
-            SELECT OBJECT_NAME(c.object_id), c.name, c.column_id,
-                UPPER(tp.name) AS DT,
-                {DataTypeExpr("c")} AS DTF,
-                c.is_nullable, COLUMNPROPERTY(c.object_id,c.name,'IsIdentity'),
-                COLUMNPROPERTY(c.object_id,c.name,'IsComputed'),
-                c.collation_name, ep.value, dc.definition,
-                CASE WHEN EXISTS (
-                    SELECT 1 FROM sys.indexes i
+            SELECT COMPRESS((
+                SELECT t.name AS [tn], c.name AS [n], c.column_id AS [ord],
+                    UPPER(tp.name) AS [dt],
+                    {DataTypeExpr("c")} AS [dtf],
+                    c.is_nullable AS [nu], c.is_identity AS [id], c.is_computed AS [cp],
+                    c.collation_name AS [co], ep.value AS [dn], dc.definition AS [de],
+                    CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS [pk],
+                    sch.name AS [sn]
+                FROM sys.columns c
+                INNER JOIN sys.tables t ON c.object_id = t.object_id
+                INNER JOIN sys.schemas sch ON t.schema_id = sch.schema_id
+                INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id
+                LEFT JOIN sys.extended_properties ep ON ep.major_id=c.object_id AND ep.minor_id=c.column_id AND ep.name='MS_Description'
+                LEFT JOIN sys.default_constraints dc ON dc.parent_object_id=c.object_id AND dc.parent_column_id=c.column_id
+                LEFT JOIN (
+                    SELECT ic.object_id, ic.column_id
+                    FROM sys.indexes i
                     INNER JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
-                    WHERE i.object_id=c.object_id AND i.is_primary_key=1 AND ic.column_id=c.column_id
-                ) THEN 1 ELSE 0 END AS PK,
-                OBJECT_SCHEMA_NAME(c.object_id) AS SchemaName
-            FROM sys.columns c
-            INNER JOIN sys.tables t ON c.object_id = t.object_id
-            INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id
-            LEFT JOIN sys.extended_properties ep ON ep.major_id=c.object_id AND ep.minor_id=c.column_id AND ep.name='MS_Description'
-            LEFT JOIN sys.default_constraints dc ON dc.parent_object_id=c.object_id AND dc.parent_column_id=c.column_id
-            ORDER BY OBJECT_SCHEMA_NAME(c.object_id), OBJECT_NAME(c.object_id), c.column_id
+                    WHERE i.is_primary_key=1
+                ) pk ON pk.object_id=c.object_id AND pk.column_id=c.column_id
+                ORDER BY sch.name, t.name, c.column_id
+                FOR JSON PATH
+            ))
+            OPTION (HASH JOIN, FORCE ORDER)
             """;
 
-        var result = new Dictionary<string, List<ColumnInfo>>();
         await using var cmd = Cmd(conn, sql);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct))
+        var qsw = Stopwatch.StartNew();
+        var payload = await cmd.ExecuteScalarAsync(ct) as byte[];
+        var qElapsed = qsw.Elapsed.TotalSeconds;
+
+        // FOR JSON 在零行时返回 NULL(COMPRESS(NULL) 同样为 NULL),直接得空结果
+        var result = new Dictionary<string, List<ColumnInfo>>();
+        if (payload is null || payload.Length == 0) return result;
+
+        var psw = Stopwatch.StartNew();
+        using var doc = JsonDocument.Parse(Encoding.Unicode.GetString(DecompressGzip(payload)));
+        foreach (var el in doc.RootElement.EnumerateArray())
         {
             var col = new ColumnInfo
             {
-                Name = r.GetString(1), Ordinal = r.GetInt32(2),
-                DataType = r.GetString(3), DataTypeFull = r.GetString(4),
-                IsNullable = r.GetBoolean(5), IsIdentity = r.GetInt32(6) == 1,
-                IsComputed = r.GetInt32(7) == 1,
-                Collation = r.IsDBNull(8) ? null : r.GetString(8),
-                Description = r.IsDBNull(9) ? null : r.GetString(9),
-                DefaultValue = r.IsDBNull(10) ? null : r.GetString(10),
-                IsPrimaryKey = r.GetInt32(11) == 1,
+                Name = el.GetProperty("n").GetString()!,
+                Ordinal = el.GetProperty("ord").GetInt32(),
+                DataType = el.GetProperty("dt").GetString()!,
+                DataTypeFull = el.GetProperty("dtf").GetString()!,
+                IsNullable = el.GetProperty("nu").GetBoolean(),
+                IsIdentity = el.GetProperty("id").GetBoolean(),
+                IsComputed = el.GetProperty("cp").GetBoolean(),
+                Collation = TryStr(el, "co"),
+                Description = TryStr(el, "dn"),
+                DefaultValue = TryStr(el, "de"),
+                IsPrimaryKey = el.GetProperty("pk").GetInt32() == 1,
             };
-            var tn = $"{r.GetString(12)}.{r.GetString(0)}";
+            var tn = $"{TryStr(el, "sn")}.{el.GetProperty("tn").GetString()}";
             if (!result.TryGetValue(tn, out var l)) result[tn] = l = [];
             l.Add(col);
         }
+        Logger.LogInformation("⏱ 全量字段 {Rows} 行, 压缩包 {Mb:F2} MB, 服务端 {Q:F1}s, 解压解析 {P:F1}s",
+            doc.RootElement.GetArrayLength(), payload.Length / 1024.0 / 1024.0, qElapsed, psw.Elapsed.TotalSeconds);
         return result;
     }
+
+    /// <summary>JSON 元素中可空字符串字段的容错读取(FOR JSON 默认省略 null 字段)。</summary>
+    private static string? TryStr(JsonElement el, string name) =>
+        el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
     private async Task<Dictionary<string, List<IndexInfo>>> ReadAllIndexesAsync(SqlConnection conn, CancellationToken ct)
     {
@@ -192,23 +245,5 @@ internal sealed partial class SqlServerSchemaProvider
             l.Add(fk);
         }
         return result;
-    }
-
-    // ========== 非流式向后兼容 ==========
-
-    private async Task<List<TableInfo>> FetchTablesAsync(SqlConnection conn, CancellationToken ct)
-    {
-        var tables = await ReadTableListAsync(conn, ct);
-        if (tables.Count == 0) return tables;
-        var cols = await ReadAllColumnsAsync(conn, ct);
-        var ix = await ReadAllIndexesAsync(conn, ct);
-        var fk = await ReadAllForeignKeysAsync(conn, ct);
-        foreach (var t in tables)
-        {
-            t.Columns = cols.GetValueOrDefault($"{t.Schema}.{t.Name}", []);
-            t.Indexes = ix.GetValueOrDefault($"{t.Schema}.{t.Name}", []);
-            t.ForeignKeys = fk.GetValueOrDefault($"{t.Schema}.{t.Name}", []);
-        }
-        return tables;
     }
 }

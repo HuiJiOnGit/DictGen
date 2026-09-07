@@ -45,13 +45,6 @@ internal sealed class ObjectArchive
     public string? ServerName { get; }
     public string? ServerVersion { get; }
 
-    public ObjectArchive(DatabaseSchema? preview = null)
-    {
-        DatabaseName = preview?.DatabaseName;
-        ServerName = preview?.ServerName;
-        ServerVersion = preview?.ServerVersion;
-    }
-
     public ObjectArchive(SchemaSourceInfo? sourceInfo = null)
     {
         DatabaseName = sourceInfo?.DatabaseName;

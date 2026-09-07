@@ -17,6 +17,7 @@
 | 决策 | 说明 |
 |------|------|
 | **流式管线** | `ISchemaProvider.EnumerateObjectsAsync` 返回 `IAsyncEnumerable<SchemaObject>`,内部 Channel 三路并行(表/视图/过程);生成器消费时按字母分块(≤400 对象/块)、3 路并行写盘。**不要**改回"全量读入内存再生成" |
+| **压缩读库** | 大结果集(全量字段、定义文本)经 `COMPRESS`/`FOR JSON` 以 GZIP 单值传输、客户端解压,目录查询带 `OPTION (HASH JOIN, FORCE ORDER)` 避免逐行探测的随机 IO(远程库实测 42.5s→10.5s)。**不要**加回明文/逐行回退路径;目标库因此需要 SQL Server 2016+ |
 | **file:// 兼容** | 产物必须支持双击打开:app.js 为 **IIFE**(非 ESM)、相对路径、分块以**静态 `<script>` 标签**注入 index.html(`<!--DICT_CHUNKS-->` 占位符),前端不做动态 script 注入 |
 | **脚本顺序** | index.html 中:search-index.js → `__DICT_CHUNK_QUEUE` 桥接 → 分块脚本 → **app.js 必须在最后**(否则 `window.__DICT` 未加载,页面空白) |
 | **前后端分离** | 前端 build 写 `index.html/app.js/style.css`(`emptyOutDir:false` 不清 data/);后端只写 `data/` + 注入分块引用,不覆盖外壳。两者可独立运行 |
