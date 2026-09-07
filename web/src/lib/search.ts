@@ -7,6 +7,29 @@ export interface SearchHit {
   score: number;
 }
 
+/** 小写字段缓存:正文(数千条过程全文)只做一次 toLowerCase,搜索时复用 */
+interface LoweredEntry {
+  n: string;
+  d: string;
+  c: string;
+  def: string;
+}
+const lcCache = new WeakMap<IndexEntry, LoweredEntry>();
+
+function lowered(e: IndexEntry): LoweredEntry {
+  let x = lcCache.get(e);
+  if (!x) {
+    x = {
+      n: e.n.toLowerCase(),
+      d: (e.d ?? "").toLowerCase(),
+      c: (e.c ?? "").toLowerCase(),
+      def: (e.def ?? "").toLowerCase(),
+    };
+    lcCache.set(e, x);
+  }
+  return x;
+}
+
 /**
  * 本地搜索:按对象名、说明、字段/参数、视图与过程正文匹配,
  * 返回按相关性排序的结果(名称前缀命中 > 名称包含 > 字段/参数 > 说明 > 正文)。
@@ -18,18 +41,15 @@ export function searchIndex(query: string, typeFilter: "all" | ObjectType): Sear
   const hits: SearchHit[] = [];
   for (const e of getIndex()) {
     if (typeFilter !== "all" && e.t !== typeFilter) continue;
-    const name = e.n.toLowerCase();
-    const desc = (e.d ?? "").toLowerCase();
-    const cols = (e.c ?? "").toLowerCase();
-    const def = (e.def ?? "").toLowerCase();
+    const low = lowered(e);
 
-    const inName = name.includes(q);
-    const inDesc = desc.includes(q);
-    const inCols = cols.includes(q);
-    const inDef = def.includes(q);
+    const inName = low.n.includes(q);
+    const inDesc = low.d.includes(q);
+    const inCols = low.c.includes(q);
+    const inDef = low.def.includes(q);
     if (!inName && !inDesc && !inCols && !inDef) continue;
 
-    const score = inName && name.startsWith(q)
+    const score = inName && low.n.startsWith(q)
       ? 0
       : inName ? 1
       : inCols ? 2

@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { DictObject } from "../types";
   import CodeBlock from "./ui/CodeBlock.svelte";
 
@@ -15,7 +15,13 @@
   <div class="sec-b">
     <table class="grid">
       <thead>
-        <tr><th style="width:44px">#</th><th>参数名</th><th>类型</th><th style="width:80px">方向</th><th>默认值</th></tr>
+        <tr>
+          <th class="w-idx" scope="col">#</th>
+          <th scope="col">参数名</th>
+          <th scope="col">类型</th>
+          <th class="w-dir" scope="col">方向</th>
+          <th scope="col">默认值</th>
+        </tr>
       </thead>
       <tbody>
         {#each prm as p, i (p.n)}

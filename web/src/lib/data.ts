@@ -17,20 +17,24 @@ const loading = new Map<string, Promise<void>>();
 
 // 消费分块脚本执行时入队的 (chunkId, data) 队列
 function drainQueue() {
-  const queue = (window as unknown as { __DICT_CHUNK_QUEUE?: [string, Record<string, DictObject>][] }).__DICT_CHUNK_QUEUE;
+  const queue = window.__DICT_CHUNK_QUEUE;
   if (queue) {
     for (const [id, data] of queue) chunkStore.set(id, data);
     queue.length = 0;
   }
   // 后续(动态注入的分块)直接注册
-  (window as unknown as { __DICT_CHUNK: (id: string, d: Record<string, DictObject>) => void }).__DICT_CHUNK =
-    (id, d) => chunkStore.set(id, d);
+  window.__DICT_CHUNK = (id, d) => chunkStore.set(id, d);
 }
 
 drainQueue();
 
 /** 元数据与搜索索引(启动即载,由 index.html 中 data/search-index.js 写入) */
-export const dictData: DictData | null = (window as unknown as { __DICT?: DictData }).__DICT ?? null;
+export const dictData: DictData | null = window.__DICT ?? null;
+
+/** 索引 key → entry 映射:避免每次 loadObject 线性扫描全索引 */
+const indexByKey = new Map<string, IndexEntry>(
+  dictData ? dictData.index.map((e) => [e.k, e] as const) : [],
+);
 
 export function getMeta() {
   return dictData?.meta ?? null;
@@ -61,7 +65,7 @@ function loadChunkDynamic(chunkId: string): Promise<void> {
 
 /** 按对象键加载详情:优先取预载分块,未预载则动态加载 */
 export async function loadObject(key: string): Promise<DictObject | null> {
-  const entry = getIndex().find((e) => e.k === key);
+  const entry = indexByKey.get(key);
   if (!entry) return null;
 
   if (!chunkStore.has(entry.ch)) {

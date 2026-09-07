@@ -3,7 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>数据库数据字典</title>
+<script>
+  /* 首屏防闪烁:在样式应用前定好主题 —— 优先取持久化值,否则跟随系统 */
+  (function () {
+    try {
+      var t = localStorage.getItem("dict-theme");
+      if (t !== "dark" && t !== "light") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.dataset.theme = t;
+    } catch (e) { /* file:// 可能禁用 localStorage */ }
+  })();
+</script>
 </head>
 <body>
 <div id="app"></div>

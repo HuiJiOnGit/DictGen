@@ -5,7 +5,11 @@
 
 export type ObjectType = "T" | "V" | "P";
 
+/** 徽章单字缩写(表/视/过) */
 export const TYPE_NAME: Record<ObjectType, string> = { T: "表", V: "视", P: "过" };
+
+/** 类型全称(表/视图/存储过程)—— 全站唯一来源,勿在组件内重复定义 */
+export const TYPE_LABEL: Record<ObjectType, string> = { T: "表", V: "视图", P: "存储过程" };
 
 // ---------- 搜索索引 ----------
 
@@ -111,6 +115,8 @@ export interface DictObject {
 declare global {
   interface Window {
     __DICT?: DictData;
+    /** 分块队列 shim:生成器注入的分块脚本先入队,数据层启动时搬入内存 */
+    __DICT_CHUNK_QUEUE?: [chunkId: string, data: Record<string, DictObject>][];
     __DICT_CHUNK?: (chunkId: string, data: Record<string, DictObject>) => void;
   }
 }

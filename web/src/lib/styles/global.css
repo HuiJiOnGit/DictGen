@@ -1,0 +1,219 @@
+/* ==========================================================================
+   数据字典 — 全局样式(设计令牌 / 基础 / 共享模式)
+   组件私有样式在各组件的 <style> 作用域块内;跨组件复用的模式集中在此。
+   ========================================================================== */
+
+/* ---------- 设计令牌 ---------- */
+:root {
+  color-scheme: light;
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --surface-2: #f0f2f7;
+  --border: #e3e6ee;
+  --text: #1f2430;
+  --muted: #5d6478;
+  --accent: #4f46e5;
+  --accent-2: #7c3aed;
+  --accent-soft: #eef0ff;
+  --accent-text: #4338ca;
+  --t-table: #2563eb;
+  --t-view: #059669;
+  --t-proc: #9333ea;
+  --badge-bg: #e5e7f2;
+  --code-bg: #0f172a;
+  --code-text: #e2e8f0;
+  --font-mono: "Cascadia Code", Consolas, "JetBrains Mono", "Courier New", monospace;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .07);
+  --shadow-pop: 0 4px 16px rgba(0, 0, 0, .18);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --dur-fast: .12s;
+  --dur: .18s;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1117;
+  --surface: #171a23;
+  --surface-2: #1e2230;
+  --border: #2a2f40;
+  --text: #e5e9f2;
+  --muted: #929bb0;
+  --accent: #818cf8;
+  --accent-2: #a78bfa;
+  --accent-soft: #22284a;
+  --accent-text: #a5b0fc;
+  --t-table: #60a5fa;
+  --t-view: #34d399;
+  --t-proc: #c084fc;
+  --badge-bg: #262c3d;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-pop: 0 4px 16px rgba(0, 0, 0, .45);
+}
+
+/* ---------- 基础 ---------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; overflow: hidden; }
+#app { height: 100%; } /* mount 目标,补齐 height:100% 链 */
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.6;
+}
+
+::selection { background: var(--accent); color: #fff; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre, .mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* 键盘焦点:统一可见焦点环(替代浏览器默认且不可省略) */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* ---------- 通用提示 / 加载 ---------- */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 8px;
+  font-size: 13px; z-index: 400; opacity: 0; pointer-events: none;
+  transition: opacity .2s; box-shadow: var(--shadow-pop);
+}
+.toast.show { opacity: 1; }
+
+.loading { text-align: center; padding: 50px; color: var(--muted); }
+.spinner {
+  width: 28px; height: 28px; margin: 0 auto 12px; border-radius: 50%;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- 详情页共享模式(sec 卡片 / 表格 / 徽标 / 统计条) ---------- */
+.sec {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); margin-bottom: 16px;
+  scroll-margin-top: 88px; /* 目录跳转时避开粘性标题 */
+}
+.sec .sec-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; border-bottom: 1px solid var(--border); font-weight: 700; font-size: 14px;
+}
+.sec .sec-h .hint { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: auto; }
+.sec .sec-b { padding: 8px 18px 16px; }
+
+.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.grid th {
+  text-align: left; padding: 8px 12px; font-size: 12px; color: var(--muted);
+  font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap;
+  position: sticky; top: 58px; z-index: 5; background: var(--surface);
+  /* top 与粘性标题露出高度对齐;Chromium 的 sticky 偏移含滚动容器 padding(24px) */
+}
+.grid td { padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.grid tbody tr:hover { background: var(--surface-2); }
+.grid td.mono, .grid th.mono { font-family: var(--font-mono); font-size: 13px; }
+.grid .num { text-align: right; }
+.grid .dim { color: var(--muted); font-size: 13px; }
+.grid .empty-row td { text-align: center; color: var(--muted); padding: 20px; }
+/* 无数据的轻量空态(无索引/无外键等) */
+.sec .empty-note {
+  text-align: center; color: var(--muted); font-size: 13px;
+  padding: 22px 16px;
+}
+/* 列宽类(替代内联 style) */
+.grid .w-idx { width: 44px; }
+.grid .w-null { width: 56px; }
+.grid .w-attr { width: 90px; }
+.grid .w-dir { width: 80px; }
+@media (max-width: 900px) {
+  .grid th { top: 62px; } /* 与小屏粘性标题露出高度对齐 */
+}
+
+.stat-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.stat {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 16px; font-size: 13px; color: var(--muted);
+}
+.stat b { color: var(--text); font-size: 15px; margin-right: 6px; }
+
+.badge {
+  display: inline-block; font-size: 11px; font-weight: 700; border-radius: 4px;
+  padding: 1px 6px; margin-right: 4px;
+}
+.badge.pk { background: #fde68a; color: #78350f; }
+.badge.id { background: #99f6e4; color: #134e4a; }
+.badge.null { background: var(--badge-bg); color: var(--muted); }
+.badge.cp { background: #e9d5ff; color: #6b21a8; }
+html[data-theme="dark"] .badge.pk { background: #78350f; color: #fde68a; }
+html[data-theme="dark"] .badge.id { background: #134e4a; color: #99f6e4; }
+html[data-theme="dark"] .badge.cp { background: #581c87; color: #e9d5ff; }
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* ---------- 日夜切换圆形扩散(View Transitions) ---------- */
+/* 揭示/收起动画必须用 CSS keyframes 挂在方向类上:Chrome 不应用 ::view-transition-*
+   伪元素上的静态 clip-path 声明,而 JS 动画最早也要等 startViewTransition 的 ready
+   (实测数百 ms)才挂得上,间隙帧里新画面会整屏裸露——表现为“先整体变暗再画圈”。
+   CSS 动画在伪元素创建的第一帧就已生效,天然没有这个间隙。 */
+/* 方向类由 JS 在过渡开始前挂到 <html>:vt-expand=亮→暗(新画面揭示),vt-shrink=暗→亮(旧画面收起) */
+html.vt-expand::view-transition-old(root),
+html.vt-shrink::view-transition-new(root) {
+  animation: none; mix-blend-mode: normal; z-index: 1;
+}
+html.vt-expand::view-transition-new(root),
+html.vt-shrink::view-transition-old(root) {
+  animation: none; mix-blend-mode: normal; z-index: 2147483646;
+}
+html.vt-expand::view-transition-new(root) {
+  animation-name: vt-circle-reveal;
+  animation-duration: 450ms;
+  animation-timing-function: cubic-bezier(.33,0,.2,1);
+  animation-fill-mode: forwards; /* 结束后保持末态裁剪,直到伪元素卸载(防回跳闪帧) */
+}
+html.vt-shrink::view-transition-old(root) {
+  animation-name: vt-circle-conceal;
+  animation-duration: 450ms;
+  animation-timing-function: cubic-bezier(.33,0,.2,1);
+  animation-fill-mode: forwards;
+}
+@keyframes vt-circle-reveal {
+  from { clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%)); }
+  to { clip-path: circle(var(--vt-r, 9999px) at var(--vt-x, 50%) var(--vt-y, 50%)); }
+}
+@keyframes vt-circle-conceal {
+  from { clip-path: circle(var(--vt-r, 9999px) at var(--vt-x, 50%) var(--vt-y, 50%)); }
+  to { clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%)); }
+}
+
+/* 过渡期间禁用元素自身的颜色过渡:新快照在切换后下一帧捕获,
+   若元素还在对背景色做 transition,快照会拍到"半旧半新"的画面,
+   动画结束卸载伪元素时会闪一下 */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}
+
+/* ---------- 动效降级 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

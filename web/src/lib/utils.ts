@@ -1,6 +1,6 @@
-/** 通用工具:转义、高亮、节流等。 */
+/** 通用工具:转义、高亮、提示等。 */
 
-export function esc(s: unknown): string {
+function esc(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as Record<string, string>
   )[c]!);
@@ -34,18 +34,21 @@ export function fmtNum(n: number | null | undefined): string {
   return n == null ? "-" : n.toLocaleString("zh-CN");
 }
 
-/** 轻提示 */
+/** 轻提示(App 内有静态 .toast 元素,这里仅兜底创建) */
 export function toast(msg: string): void {
   let el = document.querySelector<HTMLDivElement>(".toast");
   if (!el) {
     el = document.createElement("div");
     el.className = "toast";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
     document.body.appendChild(el);
   }
   el.textContent = msg;
   el.classList.add("show");
-  clearTimeout((el as HTMLDivElement & { _t?: number })._t);
-  (el as HTMLDivElement & { _t?: number })._t = window.setTimeout(() => el!.classList.remove("show"), 1800);
+  const owner = el as HTMLDivElement & { _t?: number };
+  clearTimeout(owner._t);
+  owner._t = window.setTimeout(() => el.classList.remove("show"), 1800);
 }
 
 /** 复制文本(clipboard API 失败时回退 execCommand,覆盖 file:// 场景) */
