@@ -6,7 +6,7 @@
 
 ## 1. 项目是什么
 
-.NET 10 控制台应用 + Svelte 5 前端,生成"数据库数据字典"静态站点(表/视图/存储过程文档)。
+.NET 11 控制台应用 + Svelte 5 前端,生成"数据库数据字典"静态站点(表/视图/存储过程文档)。解决方案在 `Directory.Build.props` 中统一开启 Runtime Async (`runtime-async=on`,目前仍为预览,无需设置 `EnablePreviewFeatures`)。
 
 - 后端(`src/`):读数据库 → 流式生成静态产物
 - 前端(`web/`):Svelte 5 + Vite,构建产物直出 `output/`

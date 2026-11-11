@@ -1,6 +1,6 @@
 # DictGen — 数据库数据字典生成器
 
-基于 **.NET 10 + 原生 ADO.NET(Microsoft.Data.SqlClient)** 的数据库结构文档生成工具。读取数据库元数据(表、视图、存储过程、字段、索引、外键、说明),生成**现代化、可离线双击打开**的静态数据字典站点。
+基于 **.NET 11 + 原生 ADO.NET(Microsoft.Data.SqlClient)** 的数据库结构文档生成工具。读取数据库元数据(表、视图、存储过程、字段、索引、外键、说明),生成**现代化、可离线双击打开**的静态数据字典站点。
 
 前端基于 **Svelte 5 + TypeScript + Vite** 构建,产物为纯静态文件:可直接双击打开(`file://`),也可部署到任意 Web 服务器(IIS / Nginx / 内网共享)。4000+ 对象规模下也不会出现 vuepress 式 OOM——数据由 .NET **流式生成**(Channel 边读边写),前端分块加载,内存占用有界。
 
@@ -27,7 +27,7 @@
 ```
 DictGen/
 ├── DictGen.slnx
-├── Directory.Build.props          # 公共构建属性 (net10.0)
+├── Directory.Build.props          # 公共构建属性 (net11.0 + Runtime Async)
 ├── Directory.Packages.props       # 集中包版本管理 (Central Package Management)
 ├── output/                        # 产物目录(前后端汇合,双击 index.html 即看)
 ├── src/
@@ -85,8 +85,10 @@ DictGen/
 
 | 工具 | 版本 | 说明 |
 |------|------|------|
-| .NET SDK | 10.0+ | `dotnet --version` 确认 |
+| .NET SDK | 11.0+ | `dotnet --version` 确认;框架依赖部署需要 .NET 11 Runtime |
 | pnpm | 9+ | 仅前端开发/构建时需要;只跑生成器不需要 |
+
+`Directory.Build.props` 通过 `runtime-async=on` 为解决方案内项目开启 [Runtime Async](https://learn.microsoft.com/en-us/dotnet/core/whats-new/dotnet-11/runtime#runtime-async)。该功能目前仍为预览,但 `net11.0` 项目无需设置 `EnablePreviewFeatures`;第三方 NuGet 包不受此编译配置影响。生成的静态站点仍无需 .NET 运行时。
 
 ---
 
